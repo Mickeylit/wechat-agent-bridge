@@ -192,8 +192,9 @@ python3 scripts/install.py --target both --update
 Codex 使用只读问答模式；Claude Code 默认支持问答及本地文件读取、内容搜索和文件名查找，禁用命令执行、写入、编辑及 MCP 工具。模型调用使用你本机 CLI 的账号及额度。本项目是自建桥接工具，微信账号能否接入以实际扫码结果为准。
 
 - 已在 macOS 验证原始 Codex 桥接的真实微信收发与连续对话。
-- 当前补丁在 macOS 通过 **113 项 Node 测试和 25 项 Python 测试**；另有 2 项原生 Windows PowerShell 测试仅在 Windows 执行。新增 GitHub Actions 在 Windows/Ubuntu 运行测试，并在 Windows 检查安装、更新、备份和部署准备。
-- **尚未在真实 Windows 主机验证 PowerShell 安装、任务注册及微信往返；Claude Code 后端尚未完成真实模型与微信往返验证。** 这些能力需要在目标主机验收。
+- [Windows CI 已通过](https://github.com/Mickeylit/wechat-agent-bridge/actions/runs/39582144820)：**115 项 Node 测试、25 项 Python 测试**，以及原生 PowerShell 5.1 的双宿主安装、更新、备份和运行目录准备。
+- macOS 与 Ubuntu 通过 **113 项 Node 测试和 25 项 Python 测试**，各有 2 项 Windows 专项测试跳过。
+- Windows 计划任务状态使用模拟数据测试，**仍需在问题机器验证真实任务启动、重新登录自启和微信往返**；本次没有进行真实 Claude Code 模型往返测试。CI 成功不表示已消除该机器的目录可见性差异。
 
 开发检查在仓库根目录运行：
 

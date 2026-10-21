@@ -98,6 +98,6 @@ Windows 命令定位支持原生 `.exe` 和官方 npm 包的 `.cmd` 入口。npm
 
 ## 验证状态
 
-本补丁在 macOS 通过 113 项 Node 测试和 25 项 Python 测试，另有 2 项测试仅在 Windows 运行。GitHub Actions 的 Windows 作业执行原生 PowerShell 5.1 的身份解析/启动状态测试，以及安装、更新、备份、运行目录准备；计划任务状态在测试中使用模拟数据，不注册真实任务。流水线的实际执行结果见仓库 Actions。
+[Windows CI 已通过](https://github.com/Mickeylit/wechat-agent-bridge/actions/runs/39582144820)：115 项 Node 测试、25 项 Python 测试，以及原生 PowerShell 5.1 的双宿主安装、更新、备份和运行目录准备。身份解析/启动状态测试也在原生 PowerShell 执行，但计划任务状态使用模拟数据，不注册真实任务。macOS 与 Ubuntu 各通过 113 项 Node 测试和 25 项 Python 测试，2 项 Windows 专项测试跳过。
 
 这些检查不替代目标机器的计划任务启动、重新登录后的自动恢复和微信往返验收。用户报告的临时后台进程收发成功，也不能证明该机器计划任务正常或所有 Windows 环境均已兼容。
