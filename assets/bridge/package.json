@@ -1,0 +1,19 @@
+{
+  "name": "wechat-agent-bridge-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "login": "node cli.mjs login",
+    "start": "node cli.mjs start",
+    "status": "node cli.mjs status",
+    "test": "node --test",
+    "doctor": "node cli.mjs doctor"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4"
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "微信接入 Codex / Claude Code"
+  short_description: "将个人微信连接到本机 Codex 或 Claude Code，支持连续问答与扫码重连"
+  default_prompt: "使用 $wechat-agent-bridge，帮我在普通微信中向本机 Codex 或 Claude Code 提问并收取回答。"

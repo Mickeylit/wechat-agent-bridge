@@ -1,0 +1,21 @@
+# Dependencies and local caches
+node_modules/
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
+
+# Private runtime data; deploy the bridge outside this repository.
+.state/
+.skill-backups/
+bridge.config.json
+auth.json
+state.json
+runtime.json
+*.log
+.env
+.env.*
+!.env.example
+
+# Local bundles
+*.zip
