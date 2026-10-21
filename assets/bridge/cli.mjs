@@ -18,6 +18,7 @@ import { windowsService } from './lib/windows-service.mjs';
 import { secureStateDirectory, createStopMonitor, requestGracefulStop, saveServiceConfig, runServiceWorker } from './lib/windows-runtime.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const runtimeVersion = readJson(path.join(root, 'package.json'), {}).version || 'unknown';
 const stateFlag = process.argv.indexOf('--state-dir');
 if (stateFlag !== -1 && (!process.argv[stateFlag + 1] || !path.isAbsolute(process.argv[stateFlag + 1]))) throw new Error('--state-dir 必须是绝对目录。');
 const configEnv = stateFlag === -1 ? process.env : { ...process.env, WECHAT_BRIDGE_STATE_DIR: process.argv[stateFlag + 1] };
@@ -166,8 +167,9 @@ function status() {
   const state = new Store(stateDir).data;
   const runtime = readJson(path.join(stateDir, 'runtime.json'), {});
   const pid = readJson(path.join(stateDir, 'bridge.lock'), {}).pid;
-  console.log(JSON.stringify({ bound: !!auth?.token, running: isAlive(pid), requiresLogin: runtime.state === 'login_required', pending: state.jobs.length,
-    engine, hasConversation: !!state.threadId, lastPollAt: state.lastPollAt || null, lastReplyAt: state.lastReplyAt || null, stateDirectory: stateDir }, null, 2));
+  console.log(JSON.stringify({ runtimeVersion, bound: !!auth?.token, running: isAlive(pid), requiresLogin: runtime.state === 'login_required', pending: state.jobs.length,
+    engine, hasConversation: !!state.threadId, lastPollAt: state.lastPollAt || null, lastReplyAt: state.lastReplyAt || null,
+    lastReplyKind: state.lastReplyKind || null, lastModelReplyAt: state.lastModelReplyAt || null, stateDirectory: stateDir }, null, 2));
 }
 
 async function service(action) {
@@ -234,7 +236,7 @@ function doctor() {
   const versionLaunch = resolveLaunch(binary, ['--version']);
   const result = spawnSync(versionLaunch.command, versionLaunch.args, { encoding: 'utf8', timeout: 10000, shell: false, windowsHide: true });
   if (result.status !== 0) throw new Error('CLI 无法启动，请在终端检查安装。');
-  const report = { engine, binary, launcher: versionLaunch.command, platform: process.platform, backgroundService: ({ win32: 'Windows Task Scheduler', darwin: 'macOS launchd' })[process.platform] || 'foreground only', node: process.version, nodeSupported: Number(process.versions.node.split('.')[0]) >= 24, cliVersion: result.stdout.trim().split('\n')[0].slice(0, 160), stateDir, authentication: '请在本机 CLI 完成登录；doctor 不调用模型。' };
+  const report = { runtimeVersion, engine, binary, launcher: versionLaunch.command, platform: process.platform, backgroundService: ({ win32: 'Windows Task Scheduler', darwin: 'macOS launchd' })[process.platform] || 'foreground only', node: process.version, nodeSupported: Number(process.versions.node.split('.')[0]) >= 24, cliVersion: result.stdout.trim().split('\n')[0].slice(0, 160), stateDir, authentication: '请在本机 CLI 完成登录；doctor 不调用模型。' };
   if (engine === 'claude') {
     const helpLaunch = resolveLaunch(binary, ['--help']);
     const help = spawnSync(helpLaunch.command, helpLaunch.args, { encoding: 'utf8', timeout: 10000, shell: false, windowsHide: true });

@@ -79,6 +79,106 @@ test('never returns raw errors or partial output when a turn fails', async () =>
   await assert.rejects(f.runner({ prompt: 'test' }), (error) => error.code === 'CODEX_FAILED' && !error.message.includes('secret'));
 });
 
+test('returns a completed final answer after transient stream errors', async (t) => {
+  for (const finalAfterCompletion of [false, true]) {
+    await t.test(finalAfterCompletion ? 'final emitted during shutdown' : 'final before completion', async () => {
+      const f = fixture((child) => {
+        event(child, { type: 'thread.started', thread_id: 't' });
+        event(child, { type: 'turn.started' });
+        event(child, { type: 'error', message: 'Reconnecting... 1/5' });
+        event(child, { type: 'item.completed', item: { type: 'agent_message', phase: 'commentary', text: 'retrying' } });
+        event(child, { type: 'error', message: 'Reconnecting... 2/5' });
+        if (finalAfterCompletion) event(child, { type: 'turn.completed' });
+        event(child, { type: 'item.completed', item: { type: 'agent_message', phase: 'final_answer', text: '恢复后的回答' } });
+        event(child, { type: 'item.completed', item: { type: 'agent_message', phase: 'commentary', text: 'private progress' } });
+        if (!finalAfterCompletion) event(child, { type: 'turn.completed' });
+        child.emit('close', 0);
+      });
+      assert.deepEqual(await f.runner({ prompt: 'test' }), { text: '恢复后的回答', threadId: 't' });
+    });
+  }
+});
+
+test('terminal turn failure remains a failure even after a completion and clean exit', async () => {
+  const f = fixture((child) => {
+    event(child, { type: 'thread.started', thread_id: 't' });
+    event(child, { type: 'turn.failed', error: { message: 'private failure' } });
+    event(child, { type: 'turn.started' });
+    complete(child, 'must not hide the failed turn');
+  });
+  await assert.rejects(f.runner({ prompt: 'test' }), { code: 'CODEX_FAILED' });
+});
+
+test('nonzero process exit still fails after a completed answer', async () => {
+  const f = fixture((child) => {
+    event(child, { type: 'thread.started', thread_id: 't' });
+    event(child, { type: 'item.completed', item: { type: 'agent_message', phase: 'final_answer', text: 'answer' } });
+    event(child, { type: 'turn.completed' });
+    child.emit('close', 1);
+  });
+  await assert.rejects(f.runner({ prompt: 'test' }), { code: 'CODEX_FAILED' });
+});
+
+test('unrecovered stream errors fail without exposing diagnostics or partial answers', async (t) => {
+  for (const afterCompleted of [false, true]) {
+    await t.test(afterCompleted ? 'error after completion' : 'error without completion', async () => {
+      const f = fixture((child) => {
+        event(child, { type: 'thread.started', thread_id: 't' });
+        if (afterCompleted) {
+          event(child, { type: 'item.completed', item: { type: 'agent_message', phase: 'final_answer', text: 'earlier answer' } });
+          event(child, { type: 'turn.completed' });
+        }
+        event(child, { type: 'error', message: 'sk-secret-token' });
+        child.emit('close', 0);
+      });
+      await assert.rejects(f.runner({ prompt: 'test' }), (error) => error.code === 'CODEX_FAILED' && !error.message.includes('secret'));
+    });
+  }
+});
+
+test('a recovered stream with only commentary is not a final answer', async () => {
+  const f = fixture((child) => {
+    event(child, { type: 'thread.started', thread_id: 't' });
+    event(child, { type: 'error', message: 'Reconnecting... 1/5' });
+    event(child, { type: 'item.completed', item: { type: 'agent_message', phase: 'commentary', text: 'still working' } });
+    event(child, { type: 'turn.completed' });
+    child.emit('close', 0);
+  });
+  await assert.rejects(f.runner({ prompt: 'test' }), { code: 'NO_ANSWER' });
+});
+
+test('a later turn cannot reuse an earlier turn answer or completion', async (t) => {
+  for (const completeLaterTurn of [false, true]) {
+    await t.test(completeLaterTurn ? 'completed later turn without answer' : 'unfinished later turn', async () => {
+      const f = fixture((child) => {
+        event(child, { type: 'thread.started', thread_id: 't' });
+        event(child, { type: 'turn.started' });
+        event(child, { type: 'item.completed', item: { type: 'agent_message', phase: 'final_answer', text: 'old answer' } });
+        event(child, { type: 'turn.completed' });
+        event(child, { type: 'turn.started' });
+        event(child, { type: 'item.completed', item: { type: 'agent_message', phase: 'commentary', text: 'new progress' } });
+        if (completeLaterTurn) event(child, { type: 'turn.completed' });
+        child.emit('close', 0);
+      });
+      await assert.rejects(f.runner({ prompt: 'test' }), { code: 'NO_ANSWER' });
+    });
+  }
+});
+
+test('a later completed turn returns its own answer after a retry', async () => {
+  const f = fixture((child) => {
+    event(child, { type: 'thread.started', thread_id: 't' });
+    event(child, { type: 'turn.started' });
+    event(child, { type: 'item.completed', item: { type: 'agent_message', phase: 'final_answer', text: 'old answer' } });
+    event(child, { type: 'turn.completed' });
+    event(child, { type: 'turn.started' });
+    event(child, { type: 'error', message: 'Reconnecting... 1/5' });
+    // Older CLI versions do not include phase; do not reuse the previous final.
+    complete(child, 'new answer');
+  });
+  assert.deepEqual(await f.runner({ prompt: 'test' }), { text: 'new answer', threadId: 't' });
+});
+
 test('rejects a clean process exit without a completed answer', async () => {
   const f = fixture((child) => {
     event(child, { type: 'thread.started', thread_id: 't' });

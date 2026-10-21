@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
 const CHANNEL_VERSION = '2.4.10';
 const CLIENT_VERSION = '132106';
-const BOT_AGENT = 'CodexWeChatBridge/1.0.0';
+const BOT_AGENT = 'CodexWeChatBridge/1.0.1';
 const LOSSLESS_ID_FIELDS = new Set(['message_id', 'msg_id', 'svr_id']);
 
 function validateBaseUrl(value) {

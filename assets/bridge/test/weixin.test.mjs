@@ -73,7 +73,7 @@ test('authenticated reply returns incoming context and preserves exact uint64 ID
   assert.equal(calls[0].headers.Authorization, 'Bearer local-test-token');
   assert.deepEqual(JSON.parse(calls[0].body), {
     get_updates_buf: 'previous',
-    base_info: { channel_version: '2.4.10', bot_agent: 'CodexWeChatBridge/1.0.0' },
+    base_info: { channel_version: '2.4.10', bot_agent: 'CodexWeChatBridge/1.0.1' },
   });
   const sentBody = JSON.parse(calls[1].body);
   assert.deepEqual(sentBody.msg, {

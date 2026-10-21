@@ -124,6 +124,57 @@ test('processes consecutive questions serially on the same thread', async (t) =>
   assert.equal(f.sends[1].contextToken, 'context-2');
 });
 
+test('only successful model delivery advances model verification status', async (t) => {
+  const f = fixture(t);
+  const logs = [];
+  f.bridge.log = value => logs.push(value);
+  f.bridge.ingest({ msgs: [msg(1)] });
+  await f.bridge.processQueue();
+  const modelReplyAt = new Store(f.dir).data.lastModelReplyAt;
+  assert.ok(modelReplyAt);
+  assert.equal(f.store.data.lastReplyKind, 'model');
+  assert.match(logs.at(-1), /模型回答已发送/);
+
+  f.bridge.runAgent = async () => { throw Object.assign(new Error('private diagnostic'), { code: 'CODEX_FAILED' }); };
+  f.bridge.ingest({ msgs: [msg(2)] });
+  await f.bridge.processQueue();
+  assert.equal(f.store.data.jobs.length, 0);
+  assert.equal(new Store(f.dir).data.lastReplyKind, 'error');
+  assert.equal(new Store(f.dir).data.lastModelReplyAt, modelReplyAt);
+  assert.match(logs.at(-1), /错误提示已发送/);
+  assert.doesNotMatch(f.sends.at(-1).text, /private diagnostic/);
+
+  f.bridge.ingest({ msgs: [msg(3, '/status')] });
+  await f.bridge.processQueue();
+  assert.equal(f.store.data.lastReplyKind, 'command');
+  assert.equal(f.store.data.lastModelReplyAt, modelReplyAt);
+});
+
+test('model verification waits for persisted outbox to finish delivery after restart', async (t) => {
+  const f = fixture(t, { client: { send: async () => { throw new Error('offline'); } } });
+  f.bridge.ingest({ msgs: [msg(1)] });
+  await assert.rejects(f.bridge.processQueue(), /offline/);
+  const store = new Store(f.dir);
+  assert.equal(store.data.lastModelReplyAt, undefined);
+  assert.equal(store.data.jobs[0].replyKind, 'model');
+  const restarted = new Bridge({ store, ownerId: 'owner', client: { send: async () => {} },
+    runAgent: async () => assert.fail('cached reply must not be regenerated') });
+  await restarted.processQueue();
+  assert.ok(new Store(f.dir).data.lastModelReplyAt);
+  assert.equal(new Store(f.dir).data.lastReplyKind, 'model');
+});
+
+test('legacy cached replies are delivered without claiming model verification', async (t) => {
+  const f = fixture(t);
+  f.bridge.ingest({ msgs: [msg(1)] });
+  f.store.data.jobs[0].parts = [{ text: 'cached legacy reply', clientId: 'legacy-id' }];
+  f.store.save();
+  await f.bridge.processQueue();
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.store.data.lastReplyKind, 'unknown');
+  assert.equal(f.store.data.lastModelReplyAt, undefined);
+});
+
 test('/new resets persisted conversation before the next question', async (t) => {
   const f = fixture(t);
   f.store.data.threadId = 'old-thread';

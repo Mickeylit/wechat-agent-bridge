@@ -16,12 +16,76 @@ The macOS service resolves real Node and CLI executables and gives launchd an ex
 
 On Windows, see [windows.md](windows.md) for native PowerShell installation, Task Scheduler lifecycle and CLI launcher behavior. The task uses the current signed-in user with limited privileges. The scheduled supervisor saves logs and preserves the selected executable paths; normal stop cancels the owned worker before removing the task.
 
+## Upgrade an existing runtime to 1.0.1
+
+Update the installed skill or repository first. This patch fixes Codex retry handling, Windows task identity/startup checks, and the distinction between model answers and error notices. A fresh `prepare` uses the fixed template; an existing deployment requires the separate code update below. Do not rerun `prepare` over it or move its credentials into the skill.
+
+1. Locate the actual runtime and inspect `node cli.mjs status`. Let queued questions finish; if `pending` is nonzero, keep the old worker running until it drains. Stop its service using `node cli.mjs stop-service` (or stop its supervised foreground terminal), then check that `running` is false and `pending` is still zero. If a question arrived during shutdown, restart the old worker to finish it before upgrading.
+2. Back up and replace only the eight files below. Preserve `bridge.config.json`, `.state`, CLI session storage and any unrelated local adapters. If any listed file has deliberate local modifications, review that diff and merge the fix instead of overwriting it.
+
+Windows PowerShell, after the worker has stopped:
+
+```powershell
+$skillPath = Join-Path $env:USERPROFILE '.agents\skills\wechat-agent-bridge'
+$runtimePath = Join-Path $env:LOCALAPPDATA 'WeChatAgentBridge'
+$sourcePath = Join-Path $skillPath 'assets\bridge'
+$files = @('cli.mjs', 'package.json', 'package-lock.json', 'lib\codex.mjs', 'lib\bridge.mjs', 'lib\weixin.mjs', 'lib\windows-service.mjs', 'lib\windows-runtime.mjs')
+$backupPath = Join-Path $runtimePath ('.state\upgrade-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+foreach ($file in $files) {
+    if (-not (Test-Path -LiteralPath (Join-Path $sourcePath $file) -PathType Leaf)) { throw "Missing update source: $file" }
+    if (-not (Test-Path -LiteralPath (Join-Path $runtimePath $file) -PathType Leaf)) { throw "Unsupported runtime layout: $file" }
+}
+New-Item -ItemType Directory -Path (Join-Path $backupPath 'lib') -ErrorAction Stop | Out-Null
+foreach ($file in $files) {
+    Copy-Item -LiteralPath (Join-Path $runtimePath $file) -Destination (Join-Path $backupPath $file) -ErrorAction Stop
+}
+foreach ($file in $files) {
+    Copy-Item -LiteralPath (Join-Path $sourcePath $file) -Destination (Join-Path $runtimePath $file) -Force -ErrorAction Stop
+}
+Set-Location -LiteralPath $runtimePath
+node cli.mjs doctor
+if ($LASTEXITCODE -ne 0) { throw 'Doctor failed. Restore the backed-up files before restarting.' }
+node cli.mjs install-service
+if ($LASTEXITCODE -ne 0) { throw 'Background startup failed. Inspect its diagnostics; do not report automatic startup as working.' }
+node cli.mjs status
+```
+
+Use `.claude` instead of `.agents` for that skill installation. Set `$runtimePath` to the existing deployment, not a new directory. Keep `$backupPath` to restore the same files if validation fails. No dependency versions change in this patch, so a working 1.0.0 deployment needs no new `npm ci`.
+
+macOS/Linux, after the worker has stopped:
+
+```sh
+(
+  set -eu
+  skill_path="$HOME/.agents/skills/wechat-agent-bridge"
+  runtime_path="$HOME/.local/share/wechat-agent-bridge"
+  backup_path="$runtime_path/.state/upgrade-backup-$(date +%Y%m%d-%H%M%S)"
+  for file in cli.mjs package.json package-lock.json lib/codex.mjs lib/bridge.mjs lib/weixin.mjs lib/windows-service.mjs lib/windows-runtime.mjs; do
+    test -f "$skill_path/assets/bridge/$file"
+    test -f "$runtime_path/$file"
+  done
+  mkdir -p "$backup_path/lib"
+  for file in cli.mjs package.json package-lock.json lib/codex.mjs lib/bridge.mjs lib/weixin.mjs lib/windows-service.mjs lib/windows-runtime.mjs; do
+    cp "$runtime_path/$file" "$backup_path/$file"
+  done
+  for file in cli.mjs package.json package-lock.json lib/codex.mjs lib/bridge.mjs lib/weixin.mjs lib/windows-service.mjs lib/windows-runtime.mjs; do
+    cp "$skill_path/assets/bridge/$file" "$runtime_path/$file"
+  done
+  cd "$runtime_path"
+  node cli.mjs doctor
+)
+```
+
+Use the actual paths. After `doctor` succeeds, restart with `node cli.mjs install-service` from the runtime on macOS, or `npm start` in a supervised terminal on Linux/WSL. If copying or validation fails, leave the worker stopped, restore the backed-up code and run `doctor` before starting the old version.
+
+3. Confirm `runtimeVersion` is `1.0.1`, `running` is true and `requiresLogin` is false. Ask the bound owner to resend a question that previously got an error notice. Confirm `lastModelReplyAt` advances and `lastReplyKind` becomes `model`; queued new questions may still be processing. A failed request is not automatically replayed, and an error notice advancing `lastReplyAt` is not proof of a model answer. No new pairing is required while the binding remains valid.
+
 ## Reconnect after unlinking or token invalidation
 
 1. Stop the existing deployment with `node cli.mjs stop-service`. Stop any foreground poller/login process owned by this deployment as well. Do not kill unrelated agents.
 2. Run `node cli.mjs login --web --auto-start` on macOS or Windows, and complete phone confirmation.
 3. A new login archives old pending replies into `.state/pending-before-login-*.json` and clears the old polling cursor. Ask the user to resend interrupted questions. Old context tokens must not be reused across bindings.
-4. Confirm a real incoming question has a successful reply. `bound: true` only means a credential file exists; also inspect `requiresLogin`, `running`, `pending` and `lastReplyAt`.
+4. Confirm a real incoming question has a successful reply. `bound: true` only means a credential file exists; also inspect `requiresLogin`, `running`, `pending`, `lastReplyKind` and `lastModelReplyAt`. `lastReplyAt` includes service/error messages.
 
 One WeChat user cannot keep multiple instances independently bound. Repeated scans on old screenshots or scanning a different tool's QR can replace the currently valid instance. A manual unlink also produces `-14`. Tencent documents this as a stale bot token; reauthentication is required.
 
@@ -88,6 +152,8 @@ Use `.agents` instead of `.claude` if applicable, or set `skill_path` to the ref
 | Claude refuses nested invocation | Launch the bridge from a normal terminal/service with no nested Claude session. Do not strip authentication or permission protections as a workaround. |
 | Login succeeds but model fails | Verify the chosen CLI's normal login, account access, connectivity and quota locally. The CLI errors exposed to WeChat are deliberately sanitized. |
 | Replies queue during network outage | Keep the service running; it persists answers and retries with the same client IDs. An unknown delivery outcome can still cause a duplicate. |
+| Codex generated an answer but WeChat received a failure notice | Upgrade both the skill and runtime to 1.0.1. A nonterminal Codex `error` can be followed by successful `turn.completed`; terminal failure, nonzero exit or incomplete answers still fail. |
+| Windows task registered but no worker is running | Inspect the startup stage/result code, runtime path and state permissions using [Windows recovery](windows.md#windows-background-service-recovery). Registration or a hidden terminal process does not prove restart after sign-in. |
 | `STATE_FAILED` | Fix disk/permission issues before restarting. Never move the cursor ahead of an unsaved inbox. |
 | launchd cannot read runtime | Check actual logs and macOS privacy restrictions for that folder. Use an authorized location. Do not blanket-grant Full Disk Access. |
 | Works until Mac sleeps | The host must stay awake and online; login service is not a cloud service. |
@@ -102,4 +168,4 @@ Claude shell execution, writes, edits, notebook edits, and MCP tools remain disa
 
 ## Validation evidence for this package
 
-The source Codex bridge was tested with a real paired WeChat account, a real Codex answer and a successful WeChat reply, including continuation of a CLI session. The dual-engine package adds portable configuration, native Windows installation helpers, Windows CLI/task support and Claude Code support. The current package passed **92 Node tests and 25 Python tests on macOS**, including simulated Windows behavior; no real Windows installation or end-to-end success is claimed. Claude tests use simulated CLI events because Claude Code was not installed on the authoring machine; no real Claude-to-WeChat success is claimed. Each new account/host still needs its own end-to-end check.
+The source Codex bridge was tested with a real paired WeChat account, a real Codex answer and a successful WeChat reply, including continuation of a CLI session. The dual-engine package adds portable configuration, native Windows installation helpers, Windows CLI/task support and Claude Code support. The 1.0.1 patch passed **113 Node tests and 25 Python tests on macOS**; two native PowerShell tests run only on Windows. GitHub Actions covers Ubuntu/Windows tests and native Windows PowerShell 5.1 installation, update, backup and runtime preparation. Task readiness is tested with simulated scheduler data, not a real registered task. Inspect the actual Actions results before claiming that CI passed. These tests do not prove target-host scheduled startup, automatic recovery after sign-in, or model-to-WeChat delivery. A temporary process reported working on one Windows host does not validate its scheduled task. Each account/host still needs its own end-to-end check.

@@ -53,6 +53,7 @@ export function createCodexRunner({ spawn = nodeSpawn, binary = process.env.CODE
       let explicitFinal = false;
       let completed = false;
       let turnFailed = false;
+      let streamError = false;
       let settled = false;
       let stoppingError;
       let killTimer;
@@ -100,6 +101,12 @@ export function createCodexRunner({ spawn = nodeSpawn, binary = process.env.CODE
             });
           }
         }
+        if (event.type === 'turn.started') {
+          // JSONL turn events have no turn ID; a new start invalidates old output.
+          text = '';
+          explicitFinal = false;
+          completed = false;
+        }
         if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
           const item = event.item;
           if (typeof item.text !== 'string' || item.phase === 'commentary') return;
@@ -111,8 +118,17 @@ export function createCodexRunner({ spawn = nodeSpawn, binary = process.env.CODE
             text = item.text;
           }
         }
-        if (event.type === 'turn.completed') completed = true;
-        if (event.type === 'turn.failed' || event.type === 'error') turnFailed = true;
+        if (event.type === 'turn.completed') {
+          completed = true;
+          // Codex can emit error while reconnecting and later finish successfully.
+          // Only a subsequent completion clears that error; turn.failed stays fatal.
+          streamError = false;
+        }
+        if (event.type === 'error') {
+          streamError = true;
+          completed = false;
+        }
+        if (event.type === 'turn.failed') turnFailed = true;
       };
 
       child.stdout.setEncoding('utf8');
@@ -141,7 +157,7 @@ export function createCodexRunner({ spawn = nodeSpawn, binary = process.env.CODE
         parseLine(buffer);
         await threadCallback;
         if (stoppingError) return finish(stoppingError);
-        if (code !== 0 || turnFailed) {
+        if (code !== 0 || turnFailed || streamError) {
           return finish(failure('CODEX_FAILED', 'Codex 本次调用失败，请检查本机登录、网络或额度后重试。'));
         }
         if (!completed || !text.trim() || !resultThreadId) {

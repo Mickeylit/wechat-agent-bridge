@@ -54,6 +54,7 @@ export class Bridge {
   async prepare(job) {
     const text = job.text;
     let answer;
+    let replyKind = 'command';
     if (/^\/(new|新对话)$/i.test(text)) {
       this.store.data.threadId = null;
       answer = '已开始新对话，请发送你的问题。';
@@ -72,14 +73,17 @@ export class Bridge {
           onThread: threadId => { this.store.data.threadId = threadId; this.store.save(); } });
         this.store.data.threadId = result.threadId;
         answer = result.text;
+        replyKind = 'model';
       } catch (error) {
         if (this.signal?.aborted) throw error;
         if (error.code === 'STATE_FAILED') throw error;
         // Never forward arbitrary process output, environment, or API error bodies.
         answer = `这次 ${this.engineName} 暂时没有完成回答，请稍后再试。若反复失败，请在电脑中检查引擎登录及服务状态；也可以发送 /new 开始新对话。`;
+        replyKind = 'error';
         this.log(`引擎调用未完成（${error.code || error.name || 'error'}）。`);
       }
     }
+    job.replyKind = replyKind;
     job.parts = splitText(answer || '本次没有生成回答，请重新提问。').map(text => ({ text, clientId: `wechat-${randomUUID()}` }));
     this.store.save();
   }
@@ -99,8 +103,10 @@ export class Bridge {
       this.store.data.jobs.shift();
       this.store.data.seen = [...this.store.data.seen, job.id].slice(-2000);
       this.store.data.lastReplyAt = new Date().toISOString();
+      this.store.data.lastReplyKind = job.replyKind || 'unknown';
+      if (job.replyKind === 'model') this.store.data.lastModelReplyAt = this.store.data.lastReplyAt;
       this.store.save();
-      this.log('回答已发送到微信。');
+      this.log(job.replyKind === 'model' ? '模型回答已发送到微信。' : job.replyKind === 'error' ? '错误提示已发送到微信；模型本次未完成回答。' : '服务消息已发送到微信。');
     }
   }
 

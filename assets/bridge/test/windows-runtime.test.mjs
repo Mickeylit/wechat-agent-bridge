@@ -76,6 +76,8 @@ test('unresponsive or unmatched process cannot be falsely reported stopped', asy
 
 test('scheduled worker persists paths but excludes authentication environment', async t => {
   const dir = temp(t);
+  fs.writeFileSync(path.join(dir, 'cli.mjs'), '');
+  fs.writeFileSync(path.join(dir, 'claude.exe'), '');
   const config = saveServiceConfig({ root: dir, stateDir: dir, label: 'owned', engine: 'claude', binary: path.join(dir, 'claude.exe') }, {
     Path: 'saved-path', ANTHROPIC_API_KEY: 'secret', CODEX_HOME: '/custom/codex', CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Git\\bash.exe',
   });
@@ -95,4 +97,62 @@ test('scheduled worker persists paths but excludes authentication environment', 
   assert.equal(invocation.options.windowsHide, true);
   assert.equal(invocation.options.shell, false);
   assert.equal(invocation.options.stdio[1], invocation.options.stdio[2]);
+  const startup = readJson(path.join(dir, 'service-startup.json'));
+  assert.equal(startup.state, 'stopped');
+  assert.equal(startup.exitCode, 0);
+  assert.equal(JSON.stringify(startup).includes('secret'), false);
+});
+
+function prepareWorker(t) {
+  const dir = temp(t);
+  fs.writeFileSync(path.join(dir, 'cli.mjs'), '');
+  const binary = path.join(dir, 'codex.exe');
+  fs.writeFileSync(binary, '');
+  saveServiceConfig({ root: dir, stateDir: dir, label: 'owned', engine: 'codex', binary });
+  return dir;
+}
+
+test('missing runtime files fail before spawn and save a safe actionable startup diagnosis', async t => {
+  const dir = prepareWorker(t);
+  fs.rmSync(path.join(dir, 'cli.mjs'));
+  let called = false;
+  await assert.rejects(runServiceWorker({ root: dir, stateDir: dir, spawnImpl: () => { called = true; } }), /无法读取运行目录/);
+  assert.equal(called, false);
+  const startup = readJson(path.join(dir, 'service-startup.json'));
+  assert.equal(startup.state, 'failed');
+  assert.equal(startup.stage, 'runtime-access');
+  assert.equal(startup.errorCode, 'ENOENT');
+  assert.match(fs.readFileSync(path.join(dir, 'service.log'), 'utf8'), /stage=runtime-access code=ENOENT/);
+});
+
+test('a worker spawn error is persisted and logged instead of looking like a running service', async t => {
+  const dir = prepareWorker(t);
+  await assert.rejects(runServiceWorker({ root: dir, stateDir: dir, spawnImpl: () => {
+    const child = new EventEmitter();
+    queueMicrotask(() => {
+      child.emit('error', Object.assign(new Error('private-secret-error'), { code: 'EACCES' }));
+      child.emit('close', -1);
+    });
+    return child;
+  } }), /无法启动后台桥接进程/);
+  const startup = readJson(path.join(dir, 'service-startup.json'));
+  assert.equal(startup.state, 'failed');
+  assert.equal(startup.stage, 'spawn');
+  assert.equal(startup.errorCode, 'EACCES');
+  const log = fs.readFileSync(path.join(dir, 'service.log'), 'utf8');
+  assert.match(log, /stage=spawn code=EACCES/);
+  assert.doesNotMatch(log + JSON.stringify(startup), /private-secret-error/);
+});
+
+test('nonzero worker exit is recorded as failed and remains visible to Task Scheduler restart policy', async t => {
+  const dir = prepareWorker(t);
+  const code = await runServiceWorker({ root: dir, stateDir: dir, spawnImpl: () => {
+    const child = new EventEmitter(); queueMicrotask(() => child.emit('close', 7)); return child;
+  } });
+  assert.equal(code, 7);
+  const startup = readJson(path.join(dir, 'service-startup.json'));
+  assert.equal(startup.state, 'failed');
+  assert.equal(startup.stage, 'worker');
+  assert.equal(startup.exitCode, 7);
+  assert.equal(fs.existsSync(path.join(dir, 'runtime.json')), false);
 });

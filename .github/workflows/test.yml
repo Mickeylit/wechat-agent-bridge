@@ -1,0 +1,96 @@
+name: Cross-platform tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: assets/bridge/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install locked runtime dependencies
+        working-directory: assets/bridge
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Runtime tests
+        working-directory: assets/bridge
+        run: npm test
+      - name: Python installer and deployment tests
+        run: python -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Native Windows PowerShell 5.1 installation, update and preparation
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $smokeRoot = Join-Path $env:RUNNER_TEMP ('wechat bridge smoke ' + [Guid]::NewGuid().ToString('N'))
+          $codexRoot = Join-Path $smokeRoot 'codex\skills'
+          $claudeRoot = Join-Path $smokeRoot 'claude\skills'
+          $installer = Join-Path $env:GITHUB_WORKSPACE 'scripts\install-windows.ps1'
+          $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          $sourcePackage = Get-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'assets\bridge\package.json') -Raw | ConvertFrom-Json
+          $expectedVersion = $sourcePackage.version
+          $sourceSkillHash = (Get-FileHash -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'SKILL.md') -Algorithm SHA256).Hash
+          $null = New-Item -ItemType Directory -Path $smokeRoot
+          try {
+            & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer -Target both -CodexRoot $codexRoot -ClaudeRoot $claudeRoot
+            if ($LASTEXITCODE -ne 0) { throw 'Native installation failed.' }
+            foreach ($skillsRoot in @($codexRoot, $claudeRoot)) {
+              $installedSkill = Join-Path $skillsRoot 'wechat-agent-bridge'
+              [IO.File]::WriteAllText((Join-Path $installedSkill 'ci-preserve.txt'), 'preserve previous installation')
+            }
+            & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer -Target both -CodexRoot $codexRoot -ClaudeRoot $claudeRoot -Update
+            if ($LASTEXITCODE -ne 0) { throw 'Native update failed.' }
+            foreach ($skillsRoot in @($codexRoot, $claudeRoot)) {
+              $installedSkill = Join-Path $skillsRoot 'wechat-agent-bridge'
+              $installedSkillFile = Join-Path $installedSkill 'SKILL.md'
+              if ((Get-FileHash -LiteralPath $installedSkillFile -Algorithm SHA256).Hash -ne $sourceSkillHash) { throw 'Installed skill differs from source.' }
+              if ([IO.File]::ReadAllText($installedSkillFile) -notmatch ('(?m)^  version: ' + [regex]::Escape($expectedVersion) + '\s*$')) { throw 'Skill version differs from runtime.' }
+              $installedPackage = Get-Content -LiteralPath (Join-Path $installedSkill 'assets\bridge\package.json') -Raw | ConvertFrom-Json
+              if ($installedPackage.version -ne $expectedVersion) { throw 'Installed package version differs from source.' }
+              # Windows PowerShell 5.1 ConvertFrom-Json cannot parse the lockfile's empty root package key.
+              $installedLockFile = Join-Path $installedSkill 'assets\bridge\package-lock.json'
+              & node -e "const fs=require('node:fs');const lock=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(lock.version!==process.argv[2]||lock.packages[''].version!==process.argv[2])process.exit(1)" $installedLockFile $expectedVersion
+              if ($LASTEXITCODE -ne 0) { throw 'Installed lockfile versions differ from source.' }
+              if ((Test-Path -LiteralPath (Join-Path $installedSkill 'ci-preserve.txt')) -or (Test-Path -LiteralPath (Join-Path $installedSkill 'assets\bridge\node_modules'))) { throw 'Installation contains files outside the source allowlist.' }
+              $backupRoot = Join-Path (Split-Path -Parent $skillsRoot) '.skill-backups'
+              $backups = @(Get-ChildItem -LiteralPath $backupRoot -Directory -Force)
+              if ($backups.Count -ne 1 -or [IO.File]::ReadAllText((Join-Path $backups[0].FullName 'ci-preserve.txt')) -ne 'preserve previous installation') { throw 'Update backup was not preserved outside skill discovery.' }
+            }
+            foreach ($engine in @('codex', 'claude')) {
+              $skillsRoot = if ($engine -eq 'codex') { $codexRoot } else { $claudeRoot }
+              $prepareScript = Join-Path $skillsRoot 'wechat-agent-bridge\scripts\prepare-windows.ps1'
+              $runtime = Join-Path $smokeRoot ('runtime ' + $engine)
+              & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $prepareScript -Destination $runtime -Engine $engine
+              if ($LASTEXITCODE -ne 0) { throw 'Native runtime preparation failed.' }
+              $config = Get-Content -LiteralPath (Join-Path $runtime 'bridge.config.json') -Raw | ConvertFrom-Json
+              $package = Get-Content -LiteralPath (Join-Path $runtime 'package.json') -Raw | ConvertFrom-Json
+              if ($config.engine -ne $engine -or $config.stateDir -ne './.state' -or $package.version -ne $expectedVersion) { throw 'Prepared runtime configuration/version is incorrect.' }
+              if (-not (Test-Path -LiteralPath (Join-Path $runtime 'cli.mjs') -PathType Leaf)) { throw 'Prepared runtime entry point is missing.' }
+              if (Test-Path -LiteralPath (Join-Path $runtime '.state')) { throw 'Preparation must not log in or start a service.' }
+            }
+            Write-Output "Native installation/update/preparation passed for version $expectedVersion; no login, model or live service was invoked."
+          } finally {
+            Remove-Item -LiteralPath $smokeRoot -Recurse -Force
+          }

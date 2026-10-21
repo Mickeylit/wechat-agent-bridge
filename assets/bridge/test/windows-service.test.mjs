@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   buildWindowsServiceCommand,
   buildWindowsServiceScript,
@@ -20,7 +21,7 @@ const BASE = {
 };
 
 function response(status = 'installed') {
-  return { status: 0, stdout: JSON.stringify({ ok: true, status }), stderr: '' };
+  return { status: 0, stdout: JSON.stringify({ ok: true, status, ...(status === 'installed' ? { ready: true } : {}) }), stderr: '' };
 }
 
 test('PowerShell and native Windows quoting preserve spaces, unicode and literal metacharacters', () => {
@@ -57,11 +58,28 @@ test('exact task action, executable, working directory and user are validated be
     assert.match(script, /\.Execute -ine \$bridgeNode/u);
     assert.match(script, /\.Arguments -cne \$bridgeArguments/u);
     assert.match(script, /\.WorkingDirectory -ine \$bridgeRoot/u);
-    assert.match(script, /\.Principal\.UserId -ine \$bridgeUserSid/u);
+    assert.match(script, /Resolve-BridgeUserSid \$candidate\.Principal\.UserId\) -cne \$bridgeUserSid/u);
+    assert.match(script, /NTAccount\]::new\(\$userId\)\)\.Translate\(\[Security\.Principal\.SecurityIdentifier\]\)/u);
+    assert.doesNotMatch(script, /Principal\.UserId -ine|bridgeUserName|Split\(/u);
     assert.ok(script.indexOf('Assert-BridgeTaskOwner $candidate') < script.indexOf('Disable-ScheduledTask'));
     assert.match(script, /Get-ScheduledTask -TaskName \$bridgeTaskName -TaskPath \$bridgeTaskPath -ErrorAction Stop/u);
     assert.doesNotMatch(script, /-like|-match/u);
   }
+});
+
+test('install checks runtime access and waits for a new live worker instead of accepting task registration alone', () => {
+  const script = buildWindowsServiceScript(BASE);
+  assert.ok(script.indexOf('  Assert-BridgeRuntimeAccess\n') < script.indexOf("  $script:bridgeStage = 'configure'"));
+  assert.match(script, /service-config\.json/u);
+  assert.match(script, /\[IO\.FileMode\]::CreateNew/u);
+  assert.match(script, /\$bridgeRuntime\.runId -cne \$previousRunId/u);
+  assert.match(script, /\$bridgeRuntime\.pid -eq \$bridgeLock\.pid/u);
+  assert.match(script, /Get-Process -Id \$bridgeRuntime\.pid/u);
+  assert.match(script, /\$bridgeReadySamples -ge 5/u);
+  assert.ok(script.indexOf('  Wait-BridgeTaskReady $bridgePreviousRunId') < script.indexOf('"status":"installed","ready":true'));
+  assert.throws(() => windowsService({ ...BASE, run: () => ({ status: 0, stdout: '{"ok":true,"status":"installed"}' }) }), {
+    code: 'WINDOWS_SERVICE_FAILED',
+  });
 });
 
 test('stop disables, stops, waits and unregisters only the exact named owned task', () => {
@@ -125,6 +143,7 @@ test('controlled failures preserve operation phase while redacting system output
     identity: 'WINDOWS_SERVICE_IDENTITY', configure: 'WINDOWS_SERVICE_CONFIGURE_FAILED',
     register: 'WINDOWS_SERVICE_REGISTER_FAILED', start: 'WINDOWS_SERVICE_START_FAILED',
     stop: 'WINDOWS_SERVICE_STOP_FAILED', unregister: 'WINDOWS_SERVICE_UNREGISTER_FAILED',
+    access: 'WINDOWS_SERVICE_ACCESS_FAILED', ready: 'WINDOWS_SERVICE_NOT_READY',
   };
   for (const [stage, code] of Object.entries(stages)) {
     assert.throws(() => windowsService({ ...BASE, run: () => ({
@@ -135,6 +154,83 @@ test('controlled failures preserve operation phase while redacting system output
       return true;
     });
   }
+});
+
+test('startup failures retain a safe scheduler result with a concrete path/permission diagnosis', () => {
+  assert.throws(() => windowsService({ ...BASE, run: () => ({
+    status: 1, stdout: JSON.stringify({ ok: false, stage: 'ready', taskResult: 0x8007010b }), stderr: 'private error',
+  }) }), error => {
+    assert.equal(error.code, 'WINDOWS_SERVICE_NOT_READY');
+    assert.match(error.message, /0x8007010b/u);
+    assert.match(error.message, /运行目录无效或不可访问/u);
+    assert.doesNotMatch(error.message, /private/u);
+    return true;
+  });
+  for (const taskResult of ['secret', -1, 0x100000000, 1.5]) {
+    assert.throws(() => windowsService({ ...BASE, run: () => ({
+      status: 1, stdout: JSON.stringify({ ok: false, stage: 'ready', taskResult }),
+    }) }), error => error.code === 'WINDOWS_SERVICE_NOT_READY' && !/任务结果|secret/.test(error.message));
+  }
+});
+
+function runNativeHarness(body) {
+  const script = buildWindowsServiceScript(BASE);
+  const functions = script.slice(script.indexOf('function Resolve-BridgeUserSid'), script.indexOf('function Stop-BridgeTask'));
+  const harness = `$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 2.0
+$script:bridgeStage = 'test'
+$script:bridgeTaskResult = $null
+$bridgeIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$bridgeUserSid = $bridgeIdentity.User.Value
+$bridgeNode = 'node.exe'
+$bridgeArguments = 'owned arguments'
+$bridgeRoot = 'owned root'
+$bridgeTaskName = 'owned task'
+$bridgeTaskPath = '\\'
+${functions}
+${body}`;
+  const result = spawnSync(resolvePowerShellPath(), ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(harness, 'utf16le').toString('base64')], {
+    encoding: 'utf8', windowsHide: true, shell: false, timeout: 30000,
+  });
+  assert.equal(result.status, 0, 'Native PowerShell harness failed');
+  return JSON.parse(result.stdout.replace(/^\uFEFF/u, '').trim());
+}
+
+test('native Windows resolves SID, full and short principals without accepting a different SID', { skip: process.platform !== 'win32' }, () => {
+  const result = runNativeHarness(`
+function Test-Principal($userId) {
+  $candidate = [pscustomobject]@{ Actions = @([pscustomobject]@{ Execute = $bridgeNode; Arguments = $bridgeArguments; WorkingDirectory = $bridgeRoot }); Principal = [pscustomobject]@{ UserId = $userId } }
+  try { Assert-BridgeTaskOwner $candidate; return $true } catch { return $false }
+}
+$shortName = $bridgeIdentity.Name.Split('\\')[-1]
+$shortIsCurrent = $false
+try { $shortIsCurrent = (Resolve-BridgeUserSid $shortName) -ceq $bridgeUserSid } catch {}
+@{ sid = (Test-Principal $bridgeUserSid); full = (Test-Principal $bridgeIdentity.Name); short = (Test-Principal $shortName); shortIsCurrent = $shortIsCurrent; different = (Test-Principal 'S-1-5-32-545') } | ConvertTo-Json -Compress
+`);
+  assert.equal(result.sid, true);
+  assert.equal(result.full, true);
+  assert.equal(result.short, result.shortIsCurrent);
+  assert.equal(result.different, false);
+});
+
+test('native Windows readiness rejects stale markers, dead workers and stopped tasks', { skip: process.platform !== 'win32' }, () => {
+  const result = runNativeHarness(`
+$bridgeStateDir = Join-Path $env:TEMP ('bridge-startup-test-' + [Guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Path $bridgeStateDir
+function Start-Sleep { param($Milliseconds) }
+function Get-BridgeTask { return [pscustomobject]@{ State = $script:testTaskState; Actions = @([pscustomobject]@{ Execute = $bridgeNode; Arguments = $bridgeArguments; WorkingDirectory = $bridgeRoot }); Principal = [pscustomobject]@{ UserId = $bridgeUserSid } } }
+function Get-ScheduledTaskInfo { param($TaskName, $TaskPath, $ErrorAction) return [pscustomobject]@{ LastTaskResult = 2147942667 } }
+function Check-Ready($runId, $previousId, $taskState, $workerPid) {
+  $script:testTaskState = $taskState
+  @{ state = 'running'; runId = $runId; pid = $workerPid } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bridgeStateDir 'runtime.json')
+  @{ pid = $workerPid } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bridgeStateDir 'bridge.lock')
+  try { Wait-BridgeTaskReady $previousId; return $true } catch { return $false }
+}
+try {
+  @{ fresh = (Check-Ready 'new' 'old' 'Running' $PID); stale = (Check-Ready 'same' 'same' 'Running' $PID); stopped = (Check-Ready 'new' 'old' 'Ready' $PID); dead = (Check-Ready 'new' 'old' 'Running' 2147483647) } | ConvertTo-Json -Compress
+} finally { Remove-Item -LiteralPath $bridgeStateDir -Recurse -Force }
+`);
+  assert.deepEqual(result, { fresh: true, stale: false, stopped: false, dead: false });
 });
 
 test('process start failures and timeouts are controlled and never imply a completed stop', () => {

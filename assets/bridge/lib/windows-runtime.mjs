@@ -102,19 +102,58 @@ export async function runServiceWorker({ root, stateDir, spawnImpl = spawn, env 
       !['codex', 'claude'].includes(config.engine) || !path.isAbsolute(config.nodePath) || !path.isAbsolute(config.binary)) {
     throw new Error('后台运行配置缺失或不匹配，请重新执行 install-service。');
   }
-  const fd = fs.openSync(path.join(stateDir, 'service.log'), 'a', 0o600);
+  const startupFile = path.join(stateDir, 'service-startup.json');
+  const startup = { attemptId: randomUUID(), supervisorPid: process.pid, startedAt: new Date().toISOString(), state: 'starting' };
+  const record = update => writeJson(startupFile, { ...startup, ...update });
+  record({});
+  let fd;
+  try {
+    fd = fs.openSync(path.join(stateDir, 'service.log'), 'a', 0o600);
+  } catch {
+    record({ state: 'failed', stage: 'log' });
+    throw new Error('无法写入后台服务日志，请检查状态目录的可用空间和当前用户写权限。');
+  }
+  const fail = (stage, error) => {
+    // Only retain a finite diagnostic code, never arbitrary native error text.
+    const errorCode = ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'ENOSPC'].includes(error?.code) ? error.code : 'UNKNOWN';
+    record({ state: 'failed', stage, errorCode });
+    fs.writeSync(fd, `[${new Date().toISOString()}] WINDOWS_WORKER_START_FAILED stage=${stage} code=${errorCode}\n`);
+  };
+  try {
+    if (!fs.statSync(root).isDirectory()) throw Object.assign(new Error(), { code: 'ENOTDIR' });
+    fs.accessSync(path.join(root, 'cli.mjs'), fs.constants.R_OK);
+    fs.accessSync(config.nodePath, fs.constants.R_OK);
+    fs.accessSync(config.binary, fs.constants.R_OK);
+  } catch (error) {
+    try { fail('runtime-access', error); } finally { fs.closeSync(fd); }
+    throw new Error('后台账号无法读取运行目录、CLI 或引擎程序，请检查 service-startup.json 和 service.log 后重新安装服务。');
+  }
   return await new Promise((resolve, reject) => {
     let child;
+    let failed = false;
     try {
       child = spawnImpl(config.nodePath, [path.join(root, 'cli.mjs'), 'start'], {
         cwd: root, env: serviceEnvironment(config, env), stdio: ['ignore', fd, fd], shell: false, windowsHide: true,
       });
-    } catch {
-      fs.closeSync(fd); reject(new Error('无法启动后台桥接进程。')); return;
+    } catch (error) {
+      try { fail('spawn', error); } finally { fs.closeSync(fd); }
+      reject(new Error('无法启动后台桥接进程，请检查 service-startup.json 和 service.log。')); return;
     }
     // The scheduled task owns this supervisor; it stays alive until its worker exits.
-    fs.closeSync(fd);
-    child.once('error', () => reject(new Error('无法启动后台桥接进程。')));
-    child.once('close', code => resolve(Number.isInteger(code) ? code : 1));
+    // Retain this descriptor through the error event so launch errors are logged too.
+    child.once('error', error => {
+      failed = true;
+      try { fail('spawn', error); }
+      catch { /* Preserve the controlled launch failure if diagnostics cannot be saved. */ }
+      reject(new Error('无法启动后台桥接进程，请检查 service-startup.json 和 service.log。'));
+    });
+    child.once('close', code => {
+      fs.closeSync(fd);
+      if (failed) return;
+      const exitCode = Number.isInteger(code) ? code : 1;
+      try { record({ state: exitCode === 0 ? 'stopped' : 'failed', stage: 'worker', exitCode, stoppedAt: new Date().toISOString() }); }
+      catch { reject(new Error('无法保存后台运行结果，请检查状态目录的可用空间和写权限。')); return; }
+      resolve(exitCode);
+    });
   });
 }

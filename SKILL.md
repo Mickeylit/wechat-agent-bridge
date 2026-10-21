@@ -2,12 +2,12 @@
 name: wechat-agent-bridge
 description: Set up and troubleshoot a personal WeChat chat bridge to local Codex or Claude Code for continuous Q&A. Use when the user asks to 接入微信, 微信控制 Codex/Claude Code, 微信机器人问答, reconnect QR login, or package this bridge. Supports both skill hosts; uses Tencent's published iLink protocol, not enterprise group webhooks.
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # WeChat agent bridge
 
-Skill version: `1.0.0`.
+Skill version: `1.0.1`.
 
 Connect ordinary WeChat to a local CLI and return final answers to the paired user. This skill works in Codex and Claude Code; the **host running the skill** and the **CLI answering WeChat messages** are separate choices. Use the requested backend. If unspecified, use the host's CLI when installed and authenticated; ask only if that cannot be inferred.
 
@@ -60,7 +60,7 @@ On other systems, omit `--auto-start`; after login use `npm start` in a supervis
 
 ## Verify the result
 
-Ask the user to send a simple question in the newly connected WeChat conversation. Check that it is received, a final answer is generated, and the send request succeeds (`lastReplyAt` advances, pending queue drains). Only then describe the full chain as working. Test a follow-up if continuity is relevant. Do not send messages to unrelated contacts or make an unsolicited outbound greeting.
+Ask the user to send a simple question in the newly connected WeChat conversation. Check that it is received, a final model answer is generated, and the send request succeeds (`lastModelReplyAt` advances, `lastReplyKind` is `model`, pending queue drains). `lastReplyAt` also advances for error notices and commands, so it alone does not prove a successful model answer. For older runtimes, inspect both the model result and redacted service logs. Only then describe the full chain as working. Test a follow-up if continuity is relevant. Do not send messages to unrelated contacts or make an unsolicited outbound greeting.
 
 Available WeChat commands: `/new` or `/新对话`, `/status` or `/状态`, `/help` or `/帮助`. Normal questions continue the same local CLI session; they do not automatically continue a desktop app's open chat.
 
@@ -75,6 +75,10 @@ node cli.mjs install-service
 ```
 
 Read [operations.md](references/operations.md) for reconnects, backend changes, deployment configuration, and troubleshooting. Read [protocol.md](references/protocol.md) only when changing the wire protocol or runner integration. Run the bundled isolated tests when changing code; routine login does not require running the suite again.
+
+For the 1.0.1 compatibility fixes, follow [Upgrade an existing runtime](references/operations.md#upgrade-an-existing-runtime-to-101). Update the installed skill and separately patch the deployed runtime, preserving configuration, credentials and CLI sessions. Do not leave a fix only in a local runtime when the user asks to fix this skill. A transient Codex `error` event may be followed by a successful completion; only terminal failure, nonzero exit, or an incomplete answer should fail the invocation.
+
+On Windows, treat scheduled-task registration and a functioning background worker as separate checks. The installer verifies account SID and worker startup. If startup fails, inspect the reported stage and task result, then follow [Windows background-service recovery](references/windows.md#windows-background-service-recovery). Do not silently substitute a hidden process and describe it as automatic startup. Keep a working foreground process until a deliberate, verified service replacement is ready; do not run duplicate pollers.
 
 Updating an installed skill does not update a deployed runtime. For this Claude read/search update, follow [Update an existing Claude runtime](references/operations.md#update-an-existing-claude-runtime): stop the deployment, back up and replace only its `lib/claude.mjs` from the updated asset, run `doctor`, then restart. Preserve `bridge.config.json`, `.state`, and the current WeChat binding; do not rerun `prepare` over a live deployment or ask for new pairing.
 

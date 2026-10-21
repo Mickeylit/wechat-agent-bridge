@@ -2,9 +2,11 @@
 
 在手机普通微信里发问题，由你电脑上的 Codex 或 Claude Code 回答，再把答案发回微信。支持连续对话，适合离开电脑后继续提问。
 
-当前版本：**[v1.0.0](https://github.com/Mickeylit/wechat-agent-bridge/releases/tag/v1.0.0)** · [下载技能安装包](https://github.com/Mickeylit/wechat-agent-bridge/releases/download/v1.0.0/wechat-agent-bridge-v1.0.0.zip)。
+当前版本：**[v1.0.1](https://github.com/Mickeylit/wechat-agent-bridge/releases/tag/v1.0.1)** · [下载技能安装包](https://github.com/Mickeylit/wechat-agent-bridge/releases/download/v1.0.1/wechat-agent-bridge-v1.0.1.zip)。
 
-技能版本记录在 `SKILL.md` 的 `metadata.version`，运行时版本记录在 `assets/bridge/package.json`，发布标签为 `v1.0.0`。后续修复递增补丁号、新增兼容功能递增次版本号、不兼容变更递增主版本号；每次发布保留对应标签和版本说明。
+技能版本记录在 `SKILL.md` 的 `metadata.version`，运行时版本记录在 `assets/bridge/package.json`，发布标签为 `v1.0.1`。`node cli.mjs status` 和 `doctor` 会显示实际部署的 `runtimeVersion`。后续修复递增补丁号、新增兼容功能递增次版本号、不兼容变更递增主版本号；每次发布保留对应标签和版本说明。
+
+**1.0.1 修复**：Codex 中途重试后成功回答被误判失败；Windows 计划任务用户名格式不一致导致身份误判；后台任务注册成功但没有实际运行时缺少启动检查和诊断。状态输出新增 `lastModelReplyAt` 和 `lastReplyKind`，区分模型答案与错误提示。
 
 ```text
 手机微信发问题 → 电脑上的桥接程序 → Codex / Claude Code → 微信收到回答
@@ -163,7 +165,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-windows.ps
 python3 scripts/install.py --target both --update
 ```
 
-安装器只更新能确认是本技能的目录，旧版本保存在技能搜索目录之外的 `.skill-backups` 中，并打印备份位置。**更新技能不会自动更新已部署的桥接程序。** 已有 Claude 服务要启用默认读取功能，按[现有 Claude 服务升级步骤](references/operations.md#update-an-existing-claude-runtime)停止服务、备份并仅替换运行目录的 `lib/claude.mjs`，通过 `doctor` 后重启。保留配置和 `.state`，无需重新扫码。
+安装器只更新能确认是本技能的目录，旧版本保存在技能搜索目录之外的 `.skill-backups` 中，并打印备份位置。**更新技能不会自动更新已部署的桥接程序。** 已经部署 1.0.0 的用户还须按[运行时升级到 1.0.1](references/operations.md#upgrade-an-existing-runtime-to-101)备份并替换相关代码，通过 `doctor` 后重启；配置、`.state` 和微信绑定保留，无需重新扫码。已有 Claude 服务启用默认读取功能仍可参考[Claude 适配器升级步骤](references/operations.md#update-an-existing-claude-runtime)。
 
 ## 常见问题
 
@@ -174,10 +176,14 @@ python3 scripts/install.py --target both --update
 | 出现 `-14` | 微信凭证已失效。停止服务后重新扫码，检查是否手动解绑或绑定了另一个实例。 |
 | 找不到 CLI／参数不支持 | 运行 `node cli.mjs doctor`，按提示检查安装位置或升级 CLI。 |
 | 微信收到问题但没有回答 | 在运行目录检查 `status` 和 `.state/service.log`，确认本机 CLI 登录、网络及额度。 |
+| Codex 重试后已经生成答案，微信却收到失败提示 | 将技能和已部署运行时都更新到 1.0.1；只有技能版本更新不够。 |
+| Windows 任务提示身份不符／注册后没有运行 | 更新到 1.0.1，按[后台服务排查](references/windows.md#windows-background-service-recovery)检查阶段、任务结果码和目录访问。 |
 | Claude 提示不能嵌套运行 | 从普通终端或后台服务启动桥接，不在已有 Claude 会话中嵌套启动。 |
 | 电脑休眠后停止回复 | 保持电脑唤醒并联网；本程序运行在本机。 |
 
 状态、待发消息和微信凭证存放在运行目录的 `.state` 中，**不要提交到 Git 或分享给他人**。同一状态目录只运行一个桥接进程。重新扫码前会归档旧绑定未完成的回复；需要重新发送被中断的问题。
+
+验收时确认 `lastModelReplyAt` 更新、`lastReplyKind` 为 `model`、待处理队列归零。`lastReplyAt` 也会记录错误提示或 `/status` 的发送，不能单凭它判断模型问答成功。
 
 ## 支持范围与验证状态
 
@@ -186,7 +192,7 @@ python3 scripts/install.py --target both --update
 Codex 使用只读问答模式；Claude Code 默认支持问答及本地文件读取、内容搜索和文件名查找，禁用命令执行、写入、编辑及 MCP 工具。模型调用使用你本机 CLI 的账号及额度。本项目是自建桥接工具，微信账号能否接入以实际扫码结果为准。
 
 - 已在 macOS 验证原始 Codex 桥接的真实微信收发与连续对话。
-- 当前版本在 macOS 通过 **92 项 Node 测试和 25 项 Python 测试**；Windows 分支使用模拟测试。
+- 当前补丁在 macOS 通过 **113 项 Node 测试和 25 项 Python 测试**；另有 2 项原生 Windows PowerShell 测试仅在 Windows 执行。新增 GitHub Actions 在 Windows/Ubuntu 运行测试，并在 Windows 检查安装、更新、备份和部署准备。
 - **尚未在真实 Windows 主机验证 PowerShell 安装、任务注册及微信往返；Claude Code 后端尚未完成真实模型与微信往返验证。** 这些能力需要在目标主机验收。
 
 开发检查在仓库根目录运行：
