@@ -32,9 +32,24 @@ Both adapters implement `run({prompt, threadId, cwd, signal, onThread, timeoutMs
 
 Codex uses `-a never -s read-only exec --json --skip-git-repo-check -`, adding `resume <threadId>` for continuation. Capture `thread.started` and final `agent_message`; require a completed turn and successful exit. Never forward reasoning, tool events or stderr.
 
-Claude uses `-p --output-format stream-json --verbose --safe-mode --tools '' --disallowedTools 'mcp__*' --permission-mode dontAsk --permission-prompts none` and `--resume <sessionId>` when continuing. `--tools ''` alone does not disable MCP; both controls matter. `--safe-mode` retains normal account login while disabling ordinary customizations. Parse `system/init` session IDs and only return a successful final `result`, requiring `subtype: success`, `is_error: false` and a successful exit. `--permission-prompts` requires at least 2.1.259; verify flags with `doctor`.
+Claude uses the following arguments, adding `--resume <sessionId>` when continuing:
 
-Never use `--dangerously-skip-permissions`, Codex full-access/bypass flags, copied account tokens, or shell interpolation of user text to get a bridge working. The package is Q&A by design.
+```text
+-p --output-format stream-json --verbose
+--tools Read,Grep,Glob
+--allowedTools Read,Grep,Glob
+--disallowedTools Bash,Write,Edit,NotebookEdit,mcp__*
+--permission-mode dontAsk
+--permission-prompts none
+--safe-mode
+--system-prompt-snapshot off
+```
+
+`--tools` exposes the three local read/search tools; `--allowedTools` preapproves them in `dontAsk` mode. Shell execution, file writes/edits, notebook edits, and all MCP tools remain denied. The appended instructions allow the QR-bound owner's requested local reads without another permission-enabling question. Request an absolute path when the target is unclear. These reads use the bridge computer's filesystem, not files on the phone.
+
+`--safe-mode` retains normal account login while disabling ordinary customizations. `--system-prompt-snapshot off` makes resumed sessions use the current system instructions and tool setup instead of the initial session's saved prompt snapshot. Parse `system/init` session IDs and only return a successful final `result`, requiring `subtype: success`, `is_error: false` and a successful exit. Never forward thinking, raw tool output, or stderr. `--permission-prompts` requires at least 2.1.259; `doctor` also checks every required flag, including `--allowedTools` and `--system-prompt-snapshot`.
+
+Never use `--dangerously-skip-permissions`, Codex full-access/bypass flags, copied account tokens, or shell interpolation of user text to get a bridge working. The Claude adapter supports Q&A and local read/search only.
 
 ## Native Windows integration
 

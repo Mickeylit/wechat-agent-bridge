@@ -8,12 +8,14 @@
 
 本仓库提供可安装到两个工具的 **Agent Skill**，以及独立运行的桥接程序。安装技能后，可以让 Codex 或 Claude Code 按步骤完成接入。使用腾讯公开的微信接入协议，无需安装 OpenClaw 或配置公网服务器。
 
+项目地址：[GitHub](https://github.com/Mickeylit/wechat-agent-bridge) · [GitLab 镜像](https://gz-gitlab.vipthink.cn/wandou/wechat-agent-bridge)
+
 ## 在 Windows 安装技能
 
 适用于原生 Windows 版 Codex 和 Claude Code。先安装 Git，在 PowerShell 中运行：
 
 ```powershell
-git clone https://gz-gitlab.vipthink.cn/wandou/wechat-agent-bridge.git
+git clone https://github.com/Mickeylit/wechat-agent-bridge.git
 Set-Location -LiteralPath .\wechat-agent-bridge
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -Target both
 ```
@@ -46,7 +48,7 @@ Claude Code：
 准备 Git 和 Python 3，在终端运行：
 
 ```sh
-git clone https://gz-gitlab.vipthink.cn/wandou/wechat-agent-bridge.git
+git clone https://github.com/Mickeylit/wechat-agent-bridge.git
 cd wechat-agent-bridge
 python3 scripts/install.py --target both
 ```
@@ -115,7 +117,17 @@ npm start
 
 ## 日常使用
 
-直接发送文字即可提问，后续消息会继续当前对话。
+直接发送文字即可提问，后续消息会继续当前对话。程序只处理**扫码绑定者本人**发来的私聊消息，其他发送者、群聊和机器人消息不会进入模型。
+
+Claude Code 默认启用本地文件读取和搜索工具 `Read`、`Grep`、`Glob`，可以在微信里要求它阅读文件、搜索内容或查找文件名，无需每次再开启读取权限。请写出**运行桥接程序那台电脑上的绝对路径**，例如：
+
+```text
+Windows：读取 C:\Users\你的用户名\Documents\项目\README.md，概括启动步骤。
+macOS：读取 /Users/你的用户名/Projects/demo/README.md，概括启动步骤。
+搜索：在 /Users/你的用户名/Projects/demo 中查找名称含 config 的文件，并搜索端口配置。
+```
+
+路径不明确时，助手会询问文件位置。Claude 的命令执行、文件写入与编辑、Notebook 编辑和 MCP 工具保持禁用。
 
 | 微信消息 | 作用 |
 | --- | --- |
@@ -147,7 +159,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-windows.ps
 python3 scripts/install.py --target both --update
 ```
 
-安装器只更新能确认是本技能的目录，旧版本保存在技能搜索目录之外的 `.skill-backups` 中，并打印备份位置。更新技能不会自动更新正在运行的桥接程序，也不会重新扫码或覆盖其凭证。部署变更请参考[运行与恢复指南](references/operations.md)。
+安装器只更新能确认是本技能的目录，旧版本保存在技能搜索目录之外的 `.skill-backups` 中，并打印备份位置。**更新技能不会自动更新已部署的桥接程序。** 已有 Claude 服务要启用默认读取功能，按[现有 Claude 服务升级步骤](references/operations.md#update-an-existing-claude-runtime)停止服务、备份并仅替换运行目录的 `lib/claude.mjs`，通过 `doctor` 后重启。保留配置和 `.state`，无需重新扫码。
 
 ## 常见问题
 
@@ -167,7 +179,7 @@ python3 scripts/install.py --target both --update
 
 当前支持扫码者本人私聊中的文字，以及微信接口已提供文字转写的语音。未实现群聊、图片／文件／视频理解、远程改文件、电脑操作、取消回答命令，也不会接管桌面上已有的聊天。
 
-Codex 使用只读问答模式；Claude Code 使用关闭工具的问答模式。模型调用使用你本机 CLI 的账号及额度。本项目是自建桥接工具，微信账号能否接入以实际扫码结果为准。
+Codex 使用只读问答模式；Claude Code 默认支持问答及本地文件读取、内容搜索和文件名查找，禁用命令执行、写入、编辑及 MCP 工具。模型调用使用你本机 CLI 的账号及额度。本项目是自建桥接工具，微信账号能否接入以实际扫码结果为准。
 
 - 已在 macOS 验证原始 Codex 桥接的真实微信收发与连续对话。
 - 当前版本在 macOS 通过 **92 项 Node 测试和 25 项 Python 测试**；Windows 分支使用模拟测试。

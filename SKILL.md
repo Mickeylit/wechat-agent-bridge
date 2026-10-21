@@ -12,7 +12,8 @@ Resolve bundled paths relative to this `SKILL.md`, and invoke helper scripts by 
 ## Scope and prerequisites
 
 - To run the bridge: Node.js 24+ and the chosen CLI installed and normally authenticated. Deployment helpers use Python 3, or PowerShell 5.1 on Windows. Do not request pasted API keys or account credential files.
-- Codex uses `codex exec` with a read-only sandbox and no interactive approvals. Claude uses headless print mode with built-in and MCP tools disabled. The runtime is for Q&A; arbitrary file changes, computer control, group bots, and media processing require separate implementation.
+- Codex uses `codex exec` with a read-only sandbox and no interactive approvals. Claude uses headless print mode with `Read`, `Grep`, and `Glob` enabled and preapproved by default; `Bash`, `Write`, `Edit`, `NotebookEdit`, and all MCP tools are disabled. The runtime supports Q&A and local reading/search; file changes, computer control, group bots, and media processing require separate implementation.
+- Only the QR-bound owner's private messages are handled. Their explicit request to read or search local files authorizes the default read tools; do not repeatedly ask them to enable reading. Use absolute paths on the bridge computer, such as `C:\Users\Alice\Documents\demo\README.md` or `/Users/alice/Projects/demo/README.md`. Ask for the path when the target is unclear.
 - The bundled background-service commands support macOS launchd and a current-user Windows scheduled task. Foreground execution is available on other supported Node environments. Windows-specific behavior has simulated tests; verify an actual host before claiming its end-to-end connection works.
 - Installing or packaging the skill does **not** authorize pairing a new account, replacing a running bridge, or sending test messages. When the user requests the working WeChat reply chain, replying to that paired user's incoming questions is within scope. Human QR confirmation and any displayed pairing code remain necessary.
 
@@ -35,7 +36,7 @@ node cli.mjs doctor
 
 On Windows, use `scripts/prepare-windows.ps1 -Destination C:\absolute\runtime\wechat-bridge -Engine codex` instead of the Python helper, and `npm.cmd ci --ignore-scripts --no-audit --no-fund` from PowerShell. Choose a runtime directory under the current user's local profile. Both installed skill hosts can run these same helpers.
 
-`doctor` verifies the selected CLI and version capabilities without invoking a model. It does not prove authentication or quota. Claude needs at least 2.1.259 and every flag required by the runtime; the capability check also covers `--safe-mode`, whose introduction version is not specified. Fix missing tools/login before generating the QR code. Do not silently remove permission controls for older CLI versions.
+`doctor` verifies the selected CLI and version capabilities without invoking a model. It does not prove authentication or quota. Claude needs at least 2.1.259 and every flag required by the runtime; capability checks include `--allowedTools`, `--safe-mode`, and `--system-prompt-snapshot`. Do not infer flag availability from the version alone. Fix missing tools/login before generating the QR code. Do not silently remove permission controls for older CLI versions.
 
 ## Pair and start
 
@@ -70,6 +71,8 @@ node cli.mjs install-service
 ```
 
 Read [operations.md](references/operations.md) for reconnects, backend changes, deployment configuration, and troubleshooting. Read [protocol.md](references/protocol.md) only when changing the wire protocol or runner integration. Run the bundled isolated tests when changing code; routine login does not require running the suite again.
+
+Updating an installed skill does not update a deployed runtime. For this Claude read/search update, follow [Update an existing Claude runtime](references/operations.md#update-an-existing-claude-runtime): stop the deployment, back up and replace only its `lib/claude.mjs` from the updated asset, run `doctor`, then restart. Preserve `bridge.config.json`, `.state`, and the current WeChat binding; do not rerun `prepare` over a live deployment or ask for new pairing.
 
 Preserve these invariants when adapting the runtime:
 

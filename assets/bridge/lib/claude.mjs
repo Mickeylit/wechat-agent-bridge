@@ -2,15 +2,17 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { resolveLaunch, killProcessTree } from './process.mjs';
 
 const MAX_LINE_LENGTH = 4 * 1024 * 1024;
-const WECHAT_INSTRUCTIONS = '你正在通过微信回答用户问题。默认使用简洁清楚的中文，保留必要上下文。仅回答问题，不执行命令、不读写本地文件、不向第三方发送消息，也不输出内部推理或工具日志。';
+const READ_ONLY_TOOLS = 'Read,Grep,Glob';
+const DISALLOWED_TOOLS = 'Bash,Write,Edit,NotebookEdit,mcp__*';
+const WECHAT_INSTRUCTIONS = '你正在通过微信回答已绑定用户的问题。默认使用简洁清楚的中文，保留必要上下文。可以按用户问题使用 Read、Grep、Glob 读取和检索本机文件，以便回答问题。只读工具已默认启用，无需再次要求用户开启。用户给出文件位置时使用该位置；无法确定目标文件时询问路径。不要执行命令、写入或修改文件、向第三方发送消息，也不输出内部推理或工具日志。';
 
 // --permission-prompts requires >=2.1.259. Check flags as well: --safe-mode
 // availability is documented without an explicit minimum version.
 export const MIN_CLAUDE_VERSION = '2.1.259';
 export const REQUIRED_CLAUDE_FLAGS = Object.freeze([
-  '--print', '--output-format', '--verbose', '--tools', '--disallowedTools',
+  '--print', '--output-format', '--verbose', '--tools', '--allowedTools', '--disallowedTools',
   '--permission-mode', '--permission-prompts', '--safe-mode',
-  '--append-system-prompt', '--resume',
+  '--append-system-prompt', '--system-prompt-snapshot', '--resume',
 ]);
 
 function failure(code, message) {
@@ -33,11 +35,14 @@ export function createClaudeRunner({ spawn = nodeSpawn, binary = process.env.CLA
       return Promise.reject(Object.assign(failure('ABORTED', '已停止本次回答。'), { name: 'AbortError' }));
     }
 
-    // --tools only controls built-in tools, so deny MCP tools separately.
+    // Limit exposed built-ins AND pre-approve only these reads for dontAsk mode.
+    // --tools does not limit MCP tools, which must remain explicitly denied.
     // Safe mode retains normal login while avoiding user/project customizations.
     const args = ['-p', '--output-format', 'stream-json', '--verbose',
-      '--safe-mode', '--tools', '', '--disallowedTools', 'mcp__*',
+      '--safe-mode', '--tools', READ_ONLY_TOOLS, '--allowedTools', READ_ONLY_TOOLS,
+      '--disallowedTools', DISALLOWED_TOOLS,
       '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
+      '--system-prompt-snapshot', 'off',
       '--append-system-prompt', WECHAT_INSTRUCTIONS];
     if (threadId) args.push('--resume', threadId);
 

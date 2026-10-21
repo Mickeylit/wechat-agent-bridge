@@ -68,4 +68,19 @@ node cli.mjs install-service
 
 Windows 命令定位支持原生 `.exe` 和官方 npm 包的 `.cmd` 入口。npm 入口会转换成对应 Node/原生程序直接执行，微信问题仍经 stdin 传入，不交给 `cmd.exe` 拼接。自定义批处理脚本不受支持，需配置原生程序或正常官方安装的 CLI。
 
-本版本已完成 Windows 分支模拟测试及本机回归测试；尚未在真实 Windows 主机执行 PowerShell 安装、任务注册或微信往返测试。目标主机完成实际收发后，才能宣称该主机链路已验证。
+## 在微信读取本机文件
+
+程序只响应扫码绑定者本人的私聊消息。Claude 默认启用 `Read`、`Grep`、`Glob`，用于读取文件、搜索内容和按名称查找文件；命令执行、写入、编辑及 MCP 工具保持禁用。可以直接在微信发送：
+
+```text
+读取 C:\Users\你的用户名\Documents\项目\README.md，概括启动步骤。
+在 C:\Users\你的用户名\Documents\项目 中查找名称含 config 的文件，并搜索端口配置。
+```
+
+这里填写运行桥接程序的电脑上的绝对路径。明确的读取请求无需再次开启读取权限；文件位置不清楚时，助手会请你提供路径。
+
+已有服务需要先[更新已部署的 Claude 适配器](operations.md#update-an-existing-claude-runtime)才能获得该功能。仅更新技能不会修改运行目录：停止服务，备份并替换 `lib\claude.mjs`，通过 `doctor` 后重启，配置与 `.state` 保留，无需重新扫码。
+
+## 验证状态
+
+本版本已在 macOS 通过 92 项 Node 测试和 25 项 Python 测试，包含 Windows 分支模拟测试；尚未在真实 Windows 主机执行 PowerShell 安装、任务注册或微信往返测试，也未完成真实 Claude Code—微信联调。目标主机完成实际收发后，才能宣称该主机链路已验证。

@@ -35,12 +35,29 @@ function complete(child, text = '你好', sessionId = 'session-1') {
   child.emit('close', 0);
 }
 
-test('stdin prompts use no shell, disable built-in and MCP tools, and return only final result', async () => {
+function assertReadOnlyTools(args) {
+  const value = flag => args[args.indexOf(flag) + 1];
+  assert.ok(args.includes('--tools'));
+  assert.ok(args.includes('--allowedTools'));
+  assert.ok(args.includes('--disallowedTools'));
+  assert.deepEqual(value('--tools').split(','), ['Read', 'Grep', 'Glob']);
+  assert.deepEqual(value('--allowedTools').split(','), ['Read', 'Grep', 'Glob']);
+  assert.deepEqual(value('--disallowedTools').split(','), ['Bash', 'Write', 'Edit', 'NotebookEdit', 'mcp__*']);
+  assert.equal(value('--permission-mode'), 'dontAsk');
+  assert.equal(value('--permission-prompts'), 'none');
+  assert.equal(value('--system-prompt-snapshot'), 'off');
+  assert.ok(args.includes('--safe-mode'));
+  assert.ok(!args.some(arg => arg.includes('bypass') || arg.includes('dangerously')));
+}
+
+test('stdin prompts allow only file reads, deny shell/write/MCP tools, and return only final result', async () => {
   const ids = [];
   const f = fixture((child) => {
     child.stdout.write('{"type":"sys');
     child.stdout.write('tem","subtype":"init","session_id":"session-1"}\n');
     event(child, { type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'private reasoning' }, { type: 'text', text: 'intermediate message' }] } });
+    event(child, { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/tmp/notes.md' } }] } });
+    event(child, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'read-1', content: 'raw file content' }] } });
     event(child, { type: 'system', subtype: 'hook_progress', stdout: 'secret command output' });
     event(child, { type: 'stream_event', event: { delta: { type: 'text_delta', text: 'partial' } } });
     child.stderr.write('sk-secret-credential');
@@ -53,12 +70,7 @@ test('stdin prompts use no shell, disable built-in and MCP tools, and return onl
   assert.equal(options.cwd, '/tmp');
   assert.ok(input.includes(prompt));
   assert.ok(!args.includes(prompt));
-  assert.equal(args[args.indexOf('--tools') + 1], '');
-  assert.equal(args[args.indexOf('--disallowedTools') + 1], 'mcp__*');
-  assert.equal(args[args.indexOf('--permission-mode') + 1], 'dontAsk');
-  assert.equal(args[args.indexOf('--permission-prompts') + 1], 'none');
-  assert.ok(args.includes('--safe-mode'));
-  assert.ok(!args.some((arg) => arg.includes('bypass') || arg.includes('dangerously')));
+  assertReadOnlyTools(args);
   assert.deepEqual(ids, ['session-1']);
 });
 
@@ -70,6 +82,7 @@ test('resumes exact session and supports final JSON without trailing newline', a
   assert.deepEqual(await f.runner({ prompt: '继续', threadId: 'saved-session' }), { text: '继续回答', threadId: 'saved-session' });
   assert.deepEqual(f.invocation.args.slice(-2), ['--resume', 'saved-session']);
   assert.ok(!f.invocation.args.includes('--continue'));
+  assertReadOnlyTools(f.invocation.args);
 });
 
 test('persists session from a result even if the init event was absent', async () => {
@@ -160,6 +173,8 @@ test('allows binary override and exposes doctor requirements', async () => {
   assert.equal(MIN_CLAUDE_VERSION, '2.1.259');
   assert.ok(REQUIRED_CLAUDE_FLAGS.includes('--safe-mode'));
   assert.ok(REQUIRED_CLAUDE_FLAGS.includes('--permission-prompts'));
+  assert.ok(REQUIRED_CLAUDE_FLAGS.includes('--allowedTools'));
+  assert.ok(REQUIRED_CLAUDE_FLAGS.includes('--system-prompt-snapshot'));
 });
 
 test('spawn error has a friendly message without forwarding the exception', async () => {
@@ -178,6 +193,7 @@ test('Windows Claude native exe launches directly without console or shell', asy
   assert.equal(f.invocation.options.detached, false);
   assert.ok(f.invocation.input.includes(prompt));
   assert.ok(!f.invocation.args.includes(prompt));
+  assertReadOnlyTools(f.invocation.args);
 });
 
 test('Windows Claude timeout terminates all descendants', async () => {

@@ -35,6 +35,47 @@ Keep a local copy of the old configuration, edit `engine`, and update/remove a `
 
 Legacy `wechat-codex` deployments without engine selection cannot be converted by just adding a config file. When the user requests that change, prepare a separate new deployment, validate its backend first, drain and stop the legacy service using its own command, then pair the new deployment. Preserve the legacy state for rollback; do not bundle or move its credentials into the skill. Explain that replacing the binding invalidates the old token, so rolling back after a new pairing needs another deliberate pairing. Do not claim an automatic legacy migration.
 
+## Update an existing Claude runtime
+
+Installing or updating the skill does not change a separately deployed runtime. To add the default `Read`/`Grep`/`Glob` capability to an existing deployment of this package, update **only `lib/claude.mjs`** from the refreshed skill asset. Keep `bridge.config.json`, `.state`, and the CLI's session storage in place. No new QR pairing is needed. This procedure is for a deployment already using the Claude backend, not the legacy Codex-only bridge.
+
+1. Update the installed skill first, or use a freshly updated repository as the source. Let the current answer finish and the queue drain. Stop the background service with `node cli.mjs stop-service` from its runtime directory; for a foreground process, stop its terminal with `Ctrl+C`.
+2. Back up the deployed adapter, then copy the updated asset over that adapter. Set both paths to the actual locations on this computer. Do not rerun `prepare` over the existing runtime.
+
+Windows PowerShell, using an updated Claude skill installation:
+
+```powershell
+$skillPath = Join-Path $env:USERPROFILE '.claude\skills\wechat-agent-bridge'
+$runtimePath = Join-Path $env:LOCALAPPDATA 'WeChatAgentBridge'
+$adapterPath = Join-Path $runtimePath 'lib\claude.mjs'
+$backupPath = "$adapterPath.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+Copy-Item -LiteralPath $adapterPath -Destination $backupPath -ErrorAction Stop
+Copy-Item -LiteralPath (Join-Path $skillPath 'assets\bridge\lib\claude.mjs') -Destination $adapterPath -Force -ErrorAction Stop
+Set-Location -LiteralPath $runtimePath
+node cli.mjs doctor
+if ($LASTEXITCODE -ne 0) { throw 'doctor failed; keep the service stopped and restore the adapter backup if needed.' }
+```
+
+Use `.agents` instead of `.claude` when the updated skill is installed in Codex. A refreshed repository folder may also be used as `$skillPath`.
+
+macOS/Linux, using an updated Claude skill installation:
+
+```sh
+skill_path="$HOME/.claude/skills/wechat-agent-bridge"
+runtime_path="$HOME/.local/share/wechat-agent-bridge"
+adapter_path="$runtime_path/lib/claude.mjs"
+backup_path="$adapter_path.bak-$(date +%Y%m%d-%H%M%S)"
+cp "$adapter_path" "$backup_path" &&
+cp "$skill_path/assets/bridge/lib/claude.mjs" "$adapter_path" &&
+cd "$runtime_path" &&
+node cli.mjs doctor
+```
+
+Use `.agents` instead of `.claude` if applicable, or set `skill_path` to the refreshed repository folder.
+
+3. Restart **only after `doctor` succeeds**: `node cli.mjs install-service` on macOS/Windows, or `npm start` for foreground Linux/WSL. If validation fails, correct the CLI compatibility issue while the service is stopped, or restore the saved adapter to `lib/claude.mjs`, run `doctor` again, and restart the previous version.
+4. From the bound owner's WeChat, request a file read using an absolute path on the bridge computer. Existing sessions use the updated instructions on resume, so `/new` and new pairing are unnecessary for this update.
+
 ## Diagnosing common failures
 
 | Symptom | Action |
@@ -43,6 +84,7 @@ Legacy `wechat-codex` deployments without engine selection cannot be converted b
 | `-14` | Treat the token as invalid; stop and reconnect. Do not attribute it to answer latency. |
 | CLI not found | Run `doctor`; supply its absolute executable path in `binary` if PATH differs. |
 | Claude rejects a flag | Upgrade to a version whose `--help` includes all required flags. Keep permission restrictions. |
+| Claude still says local reads are unavailable after a skill update | Update the deployed `lib/claude.mjs` using the procedure above, then run `doctor` and restart the service. Updating the skill alone does not update the running adapter. |
 | Claude refuses nested invocation | Launch the bridge from a normal terminal/service with no nested Claude session. Do not strip authentication or permission protections as a workaround. |
 | Login succeeds but model fails | Verify the chosen CLI's normal login, account access, connectivity and quota locally. The CLI errors exposed to WeChat are deliberately sanitized. |
 | Replies queue during network outage | Keep the service running; it persists answers and retries with the same client IDs. An unknown delivery outcome can still cause a duplicate. |
@@ -54,8 +96,10 @@ Do not repeatedly run model tests after the needed checks pass. The package prov
 
 ## Capability limits
 
-Text questions and upstream-provided voice transcripts are supported. Images, videos, files, group conversations, cancellation commands, desktop thread takeover and remote file editing are not implemented. Codex's read-only filesystem sandbox does not independently prohibit configured MCP network side effects; the adapter's Q&A instructions do not replace platform policy. Claude's no-tool/safe-mode configuration is not an OS sandbox, and administrator-managed policy hooks may still run. Treat any expansion to tool actions as a separate requested change.
+Text questions and upstream-provided voice transcripts are supported. Only the QR-bound owner's private messages are handled; other senders, groups and bot messages are rejected. Claude enables local `Read`, `Grep`, and `Glob` by default, so the owner can request file reading, content search and filename matching without repeated permission-enabling questions. Use an absolute path on the bridge computer, such as `C:\Users\Alice\Documents\demo\README.md` or `/Users/alice/Projects/demo/README.md`.
+
+Claude shell execution, writes, edits, notebook edits, and MCP tools remain disabled. Image/video understanding, WeChat file attachments, cancellation commands, desktop thread takeover and remote file editing are not implemented. Codex uses a read-only filesystem sandbox. CLI permissions still run within the local account's operating-system permissions; this package does not grant additional OS access.
 
 ## Validation evidence for this package
 
-The source Codex bridge was tested with a real paired WeChat account, a real Codex answer and a successful WeChat reply, including continuation of a CLI session. The dual-engine package adds portable configuration, native Windows installation helpers, Windows CLI/task support and Claude Code support. Windows-specific behavior has simulated tests on macOS; no real Windows installation or end-to-end success is claimed. Claude tests use simulated CLI events because Claude Code was not installed on the authoring machine; no real Claude-to-WeChat success is claimed. Each new account/host still needs its own end-to-end check.
+The source Codex bridge was tested with a real paired WeChat account, a real Codex answer and a successful WeChat reply, including continuation of a CLI session. The dual-engine package adds portable configuration, native Windows installation helpers, Windows CLI/task support and Claude Code support. The current package passed **92 Node tests and 25 Python tests on macOS**, including simulated Windows behavior; no real Windows installation or end-to-end success is claimed. Claude tests use simulated CLI events because Claude Code was not installed on the authoring machine; no real Claude-to-WeChat success is claimed. Each new account/host still needs its own end-to-end check.
