@@ -2,6 +2,10 @@
 
 在手机普通微信里发问题，由你电脑上的 Codex 或 Claude Code 回答，再把答案发回微信。支持连续对话，适合离开电脑后继续提问。
 
+当前版本：**[v1.0.0](https://github.com/Mickeylit/wechat-agent-bridge/releases/tag/v1.0.0)** · [下载技能安装包](https://github.com/Mickeylit/wechat-agent-bridge/releases/download/v1.0.0/wechat-agent-bridge-v1.0.0.zip)。
+
+技能版本记录在 `SKILL.md` 的 `metadata.version`，运行时版本记录在 `assets/bridge/package.json`，发布标签为 `v1.0.0`。后续修复递增补丁号、新增兼容功能递增次版本号、不兼容变更递增主版本号；每次发布保留对应标签和版本说明。
+
 ```text
 手机微信发问题 → 电脑上的桥接程序 → Codex / Claude Code → 微信收到回答
 ```

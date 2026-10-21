@@ -1,9 +1,13 @@
 ---
 name: wechat-agent-bridge
 description: Set up and troubleshoot a personal WeChat chat bridge to local Codex or Claude Code for continuous Q&A. Use when the user asks to 接入微信, 微信控制 Codex/Claude Code, 微信机器人问答, reconnect QR login, or package this bridge. Supports both skill hosts; uses Tencent's published iLink protocol, not enterprise group webhooks.
+metadata:
+  version: 1.0.0
 ---
 
 # WeChat agent bridge
+
+Skill version: `1.0.0`.
 
 Connect ordinary WeChat to a local CLI and return final answers to the paired user. This skill works in Codex and Claude Code; the **host running the skill** and the **CLI answering WeChat messages** are separate choices. Use the requested backend. If unspecified, use the host's CLI when installed and authenticated; ask only if that cannot be inferred.
 
